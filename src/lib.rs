@@ -19,16 +19,6 @@ impl LazTextInfo {
             count += 1;
             let point = wrapped_point.unwrap();
             point_vec.push(point);
-            /*
-            println!("Point coordinates: ({}, {}, {})", point.x, point.y, point.z);
-            if let Some(color) = point.color {
-                println!("Point color: red={}, green={}, blue={}",
-                    color.red,
-                    color.green,
-                    color.blue,
-                );
-            }
-            */
         }
 
         Ok(LazTextInfo { point_count: count, points: point_vec })
