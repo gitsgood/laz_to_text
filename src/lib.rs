@@ -48,6 +48,7 @@ impl LazTextInfo {
 pub fn get_laz_file() -> Option<PathBuf> {
     let path = DialogBuilder::file()
     //.set_location(&std::env::current_dir().unwrap())
+    .set_title("Which LAZ file do you want to convert?")
     .set_location("~/")
     .add_filter("LAZ", ["laz"])
     .open_single_file()
