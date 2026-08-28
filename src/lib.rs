@@ -9,15 +9,15 @@ pub struct LazTextInfo {
 
 impl LazTextInfo {
     pub fn new() -> Result<LazTextInfo, Box<dyn std::error::Error>> {
-        let mut reader = Reader::from_path(get_laz_file().unwrap()).unwrap();
-        let pd = reader.read_all().unwrap();
+        let mut reader = Reader::from_path(get_laz_file().unwrap())?;
+        let pd = reader.read_all()?;
 
         let mut count: usize = 0;
         let mut point_vec: Vec<las::Point> = vec![];
 
         for wrapped_point in pd.points() {
             count += 1;
-            let point = wrapped_point.unwrap();
+            let point = wrapped_point?;
             point_vec.push(point);
         }
 
