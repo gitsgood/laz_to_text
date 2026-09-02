@@ -11,15 +11,29 @@ pub struct LazPoint {
 }
 
 impl LazPoint {
-    pub fn from(input: Point) -> Result<LazPoint, Box<dyn std::error::Error>> {
+    pub fn from(input: Point) -> LazPoint {
         let parsed_point = LazPoint { x: (input.x), y: (input.y), z: (input.z) };
-        Ok(parsed_point)
+        parsed_point
+    }
+
+    pub fn new(in_x: f64, in_y: f64, in_z: f64) -> LazPoint {
+        let new_point: LazPoint = LazPoint { x: (in_x), y: (in_y), z: (in_z) };
+        new_point
+    }
+
+    pub fn get_highest_numbers_point(&self, other_point: &LazPoint) -> LazPoint {
+        let superior_point = LazPoint::new(
+            self.x.max(other_point.x), 
+            self.y.max(other_point.y), 
+            self.z.max(other_point.z));
+        superior_point
     }
 }
 
 #[derive(Serialize)]
 pub struct LazInfo {
     pub point_count: usize,
+    pub cloud_edge: LazPoint,
     pub points: Vec<LazPoint>
 }
 
@@ -31,14 +45,17 @@ impl LazInfo {
         let mut count: usize = 0;
         let mut point_vec: Vec<LazPoint> = vec![];
 
+        let mut highest_point = LazPoint::new(0.0, 0.0, 0.0);
+
         for wrapped_point in pd.points() {
             count += 1;
             let point = wrapped_point?;
-            let parsed_point = LazPoint::from(point)?;
+            let parsed_point = LazPoint::from(point);
+            highest_point = highest_point.get_highest_numbers_point(&parsed_point);
             point_vec.push(parsed_point);
         }
 
-        Ok(LazInfo { point_count: count, points: point_vec })
+        Ok(LazInfo { point_count: count, cloud_edge: highest_point, points: point_vec })
     }
 
     pub fn print_to_text(&self) -> Result<(), Box<dyn std::error::Error>> {
