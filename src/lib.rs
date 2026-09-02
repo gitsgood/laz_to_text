@@ -28,13 +28,48 @@ impl LazPoint {
             self.z.max(other_point.z));
         superior_point
     }
+
+    pub fn get_lowest_numbers_point(&self, other_point: &LazPoint) -> LazPoint {
+        let inferior_point = LazPoint::new(
+            self.x.min(other_point.x), 
+            self.y.min(other_point.y), 
+            self.z.min(other_point.z));
+        inferior_point
+    }
+
+    pub fn add(&self, other_point: &LazPoint) -> LazPoint {
+        let sum_point = LazPoint::new(
+            self.x.add(other_point.x), 
+            self.y.add(other_point.y), 
+            self.z.add(other_point.z));
+        sum_point
+    }
+
+    pub fn divide_by_number(&self, number: f64) -> LazPoint {
+        let quotient_point = LazPoint::new(
+            self.x / number, 
+            self.y / number, 
+            self.z / number);
+        quotient_point
+    }
+
+    pub fn copy(&self) -> LazPoint {
+        let copy_point = LazPoint::new(
+            self.x, 
+            self.y, 
+            self.z);
+        copy_point
+    }
 }
 
 #[derive(Serialize)]
 pub struct LazInfo {
     pub point_count: usize,
-    pub cloud_edge: LazPoint,
-    pub points: Vec<LazPoint>
+    pub maximum_dimensions_point: LazPoint,
+    pub minimum_dimensions_point: LazPoint,
+    pub mean_dimensions_point: LazPoint,
+    pub points: Vec<LazPoint>,
+    pub scaled_down_points: Vec<LazPoint>
 }
 
 impl LazInfo {
@@ -44,18 +79,50 @@ impl LazInfo {
 
         let mut count: usize = 0;
         let mut point_vec: Vec<LazPoint> = vec![];
+        let mut scaled_point_vec : Vec<LazPoint> = vec![];
 
-        let mut highest_point = LazPoint::new(0.0, 0.0, 0.0);
+        let mut highest_point: LazPoint = LazPoint::new(f64::MIN, f64::MIN, f64::MIN);
+        let mut lowest_point: LazPoint = LazPoint::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut mean_point: LazPoint = LazPoint::new(0.0, 0.0, 0.0);
 
         for wrapped_point in pd.points() {
             count += 1;
             let point = wrapped_point?;
             let parsed_point = LazPoint::from(point);
             highest_point = highest_point.get_highest_numbers_point(&parsed_point);
-            point_vec.push(parsed_point);
+            lowest_point = lowest_point.get_lowest_numbers_point(&parsed_point);
+            mean_point = mean_point.add(&parsed_point);
+
+            point_vec.push(parsed_point.copy());
+            scaled_point_vec.push(parsed_point);
         }
 
-        Ok(LazInfo { point_count: count, cloud_edge: highest_point, points: point_vec })
+        let range_x = highest_point.x - lowest_point.x;
+        let range_y = highest_point.y - lowest_point.y;
+        let range_z = highest_point.z - lowest_point.z;
+
+        let max_range = range_x.max(range_y).max(range_z);
+
+        let scale = if max_range == 0.0 {1.0} else {max_range};
+
+        for unscaled_point in &mut scaled_point_vec {
+            unscaled_point.x = (unscaled_point.x - lowest_point.x)/scale;
+            unscaled_point.y = (unscaled_point.y - lowest_point.y)/scale;
+            unscaled_point.z = (unscaled_point.z - lowest_point.z)/scale;
+        }
+
+        let count_ref = &count;
+        let count_for_division = *count_ref as f64;
+
+        mean_point = mean_point.divide_by_number(count_for_division);
+
+        Ok(LazInfo { 
+            point_count: count, 
+            maximum_dimensions_point: highest_point,
+            minimum_dimensions_point: lowest_point,
+            mean_dimensions_point: mean_point,
+            points: point_vec,
+            scaled_down_points:  scaled_point_vec})
     }
 
     pub fn print_to_text(&self) -> Result<(), Box<dyn std::error::Error>> {
