@@ -61,16 +61,6 @@ impl LazPoint {
             self.z * number);
         product_point
     }
-
-    /*
-    pub fn copy(&self) -> LazPoint {
-        let copy_point = LazPoint::new(
-            self.x, 
-            self.y, 
-            self.z);
-        copy_point
-    }
-    */
 }
 
 #[derive(Serialize)]
@@ -336,20 +326,8 @@ impl LazInfo {
         default
     }
 
-    pub fn print_to_text(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let users_path = get_text_destination("Where do you want your LAZ text file placed?").unwrap();
-        let output_path = match users_path.into_os_string().into_string() {
-            Ok(string) => string.add("/laz_text.txt"),
-            Err(os_string) => { 
-                return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
-            }
-        };
-        /*
-        let mut output_path = std::env::current_dir()?;
-        output_path.push("laz_text.txt");
-        */
-
-        let file = File::create(output_path)?;
+    pub fn print_to_text<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
 
         writeln!(writer, "{}" ,&self.point_count)?;
@@ -363,20 +341,8 @@ impl LazInfo {
         Ok(())
     }
 
-    pub fn print_as_json(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let users_path = get_text_destination("Where do you want your LAZ json file placed?").unwrap();
-        let output_path = match users_path.into_os_string().into_string() {
-            Ok(string) => string.add("/laz_json.json"),
-            Err(os_string) => { 
-                return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
-            }
-        };
-        /* 
-        let mut output_path = std::env::current_dir()?;
-        output_path.push("laz_text.json");
-        */
-
-        write_json(&self, &output_path)?;
+    pub fn print_as_json<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        write_json(&self, path)?;
 
         Ok(())
     }
