@@ -4,20 +4,21 @@ use las::{Point, Reader};
 use serde::{Serialize};
 use rayon::prelude::*;
 
-#[derive(Serialize, Clone, Copy)]
+#[repr(C)] // Ensures C-compatible memory layout
+#[derive(Serialize, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LazPoint {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64
+    pub x: f32,
+    pub y: f32,
+    pub z: f32
 }
 
 impl LazPoint {
     pub fn from(input: Point) -> Result<LazPoint, Box<dyn std::error::Error>> {
-        let parsed_point = LazPoint { x: (input.x), y: (input.y), z: (input.z) };
+        let parsed_point = LazPoint { x: (input.x as f32), y: (input.y as f32), z: (input.z as f32) };
         Ok(parsed_point)
     }
 
-    pub fn new(in_x: f64, in_y: f64, in_z: f64) -> LazPoint {
+    pub fn new(in_x: f32, in_y: f32, in_z: f32) -> LazPoint {
         let new_point: LazPoint = LazPoint { x: (in_x), y: (in_y), z: (in_z) };
         new_point
     }
@@ -46,7 +47,7 @@ impl LazPoint {
         sum_point
     }
 
-    pub fn divide_by_number(&self, number: f64) -> LazPoint {
+    pub fn divide_by_number(&self, number: f32) -> LazPoint {
         let quotient_point = LazPoint::new(
             self.x / number, 
             self.y / number, 
@@ -54,7 +55,7 @@ impl LazPoint {
         quotient_point
     }
 
-    pub fn multiply_by_number(&self, number: f64) -> LazPoint {
+    pub fn multiply_by_number(&self, number: f32) -> LazPoint {
         let product_point = LazPoint::new(
             self.x * number, 
             self.y * number, 
@@ -97,8 +98,8 @@ impl LazInfo {
             // Each thread will then perform the operation enclosed in the "fold_op" parameter, basically finding the max, min, and total sum of every chunk.
             .fold(
             ||(
-                LazPoint::new(f64::MIN, f64::MIN, f64::MIN), // highest
-                LazPoint::new(f64::MAX, f64::MAX, f64::MAX), // lowest
+                LazPoint::new(f32::MIN, f32::MIN, f32::MIN), // highest
+                LazPoint::new(f32::MAX, f32::MAX, f32::MAX), // lowest
                 LazPoint::new(0.0, 0.0, 0.0),               // sum
             ),
             |mut point_throuple: (LazPoint, LazPoint, LazPoint), point_from_vector: &LazPoint|{
@@ -113,8 +114,8 @@ impl LazInfo {
             // For thousands of points, the below would have to only compare a handful of numbers to find the wanted result.
             .reduce(
                 || (
-                    LazPoint::new(f64::MIN, f64::MIN, f64::MIN),
-                    LazPoint::new(f64::MAX, f64::MAX, f64::MAX),
+                    LazPoint::new(f32::MIN, f32::MIN, f32::MIN),
+                    LazPoint::new(f32::MAX, f32::MAX, f32::MAX),
                     LazPoint::new(0.0, 0.0, 0.0),
                 ), 
                 |mut another_point_throuple: (LazPoint, LazPoint, LazPoint), previous_point_throuple: (LazPoint, LazPoint, LazPoint)| {
@@ -134,8 +135,8 @@ impl LazInfo {
         let mut scaled_point_vec : Vec<LazPoint> = vec![];
         scaled_point_vec.reserve(count);
 
-        let mut highest_point: LazPoint = LazPoint::new(f64::MIN, f64::MIN, f64::MIN);
-        let mut lowest_point: LazPoint = LazPoint::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut highest_point: LazPoint = LazPoint::new(f32::MIN, f32::MIN, f32::MIN);
+        let mut lowest_point: LazPoint = LazPoint::new(f32::MAX, f32::MAX, f32::MAX);
         let mut total_sum: LazPoint = LazPoint::new(0.0, 0.0, 0.0);
         
 
@@ -177,7 +178,7 @@ impl LazInfo {
         }
 
         let count_ref = &count;
-        let count_for_division = *count_ref as f64;
+        let count_for_division = *count_ref as f32;
 
         let mean_point = total_sum.divide_by_number(count_for_division);
 
@@ -208,8 +209,8 @@ impl LazInfo {
             // Each thread will then perform the operation enclosed in the "fold_op" parameter, basically finding the max, min, and total sum of every chunk.
             .fold(
             ||(
-                LazPoint::new(f64::MIN, f64::MIN, f64::MIN), // highest
-                LazPoint::new(f64::MAX, f64::MAX, f64::MAX), // lowest
+                LazPoint::new(f32::MIN, f32::MIN, f32::MIN), // highest
+                LazPoint::new(f32::MAX, f32::MAX, f32::MAX), // lowest
                 LazPoint::new(0.0, 0.0, 0.0),               // sum
             ),
             |mut point_throuple: (LazPoint, LazPoint, LazPoint), point_from_vector: &LazPoint|{
@@ -224,8 +225,8 @@ impl LazInfo {
             // For thousands of points, the below would have to only compare a handful of numbers to find the wanted result.
             .reduce(
                 || (
-                    LazPoint::new(f64::MIN, f64::MIN, f64::MIN),
-                    LazPoint::new(f64::MAX, f64::MAX, f64::MAX),
+                    LazPoint::new(f32::MIN, f32::MIN, f32::MIN),
+                    LazPoint::new(f32::MAX, f32::MAX, f32::MAX),
                     LazPoint::new(0.0, 0.0, 0.0),
                 ), 
                 |mut another_point_throuple: (LazPoint, LazPoint, LazPoint), previous_point_throuple: (LazPoint, LazPoint, LazPoint)| {
@@ -254,7 +255,7 @@ impl LazInfo {
         }
 
         let count_ref = &count;
-        let count_for_division = *count_ref as f64;
+        let count_for_division = *count_ref as f32;
 
         let mean_point = total_sum.divide_by_number(count_for_division);
 
@@ -271,8 +272,8 @@ impl LazInfo {
         let count_sum = self.point_count + other_laz.point_count;
         let merged_highest = self.maximum_dimensions_point.get_highest_numbers_point(&other_laz.maximum_dimensions_point);
         let merged_lowest = self.minimum_dimensions_point.get_lowest_numbers_point(&other_laz.minimum_dimensions_point);
-        let merged_mean = self.mean_dimensions_point.multiply_by_number(self.point_count as f64)
-            .add(&other_laz.mean_dimensions_point.multiply_by_number(other_laz.point_count as f64)).divide_by_number(count_sum as f64);
+        let merged_mean = self.mean_dimensions_point.multiply_by_number(self.point_count as f32)
+            .add(&other_laz.mean_dimensions_point.multiply_by_number(other_laz.point_count as f32)).divide_by_number(count_sum as f32);
 
         self.point_count = count_sum;
         self.maximum_dimensions_point = merged_highest;
@@ -343,6 +344,26 @@ impl LazInfo {
 
     pub fn print_as_json<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
         write_json(&self, path)?;
+
+        Ok(())
+    }
+
+    pub fn print_as_binary<P :AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+
+        let reordered_points = self.scaled_down_points
+            .par_iter()
+            .map(|p| LazPoint {
+                x : p.x,
+                y : p.z,
+                z : -p.y
+            }).collect::<Vec<LazPoint>>();
+
+        // Cast the slice of Points into a slice of bytes ([u8])
+        let bytes: &[u8] = bytemuck::cast_slice(&reordered_points);
+
+        writer.write_all(bytes)?;
 
         Ok(())
     }

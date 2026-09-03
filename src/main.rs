@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {    
         println!("------------------------------");
         println!("What file extension do you wish your data to have?");
-        println!("1: json\nElse: txt");
+        println!("1: json\n2: binary\nElse: txt");
 
         let mut users_input = String::new();
         std::io::stdin().read_line(&mut users_input)?;
@@ -103,6 +103,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     laz_info.print_as_json(output_path).expect("Couldn't print the json");
                 });
             }
+            2 => {
+                println!("You selected binary");
+                let users_path = get_text_destination("Where do you want your LAZ binary file placed?").unwrap();
+                let output_path = match users_path.into_os_string().into_string() {
+                    Ok(string) => string.add("/laz_json.bin"),
+                    Err(os_string) => { 
+                        return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
+                    }
+                };
+                time_it("Printing the binary", || {
+                    laz_info.print_as_binary(output_path).expect("Couldn't print the binary");
+                });
+            }
             _ => {
                 println!("You selected .txt");
                 let users_path = get_text_destination("Where do you want your LAZ text file placed?").unwrap();
@@ -119,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         println!("Do you wish to print the current collection again?");
-        println!("1: YES\n2: No");
+        println!("1: YES\nElse: No");
         let mut users_second_input = String::new();
         std::io::stdin().read_line(&mut users_second_input)?;
 
