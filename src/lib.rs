@@ -54,6 +54,14 @@ impl LazPoint {
         quotient_point
     }
 
+    pub fn multiply_by_number(&self, number: f64) -> LazPoint {
+        let product_point = LazPoint::new(
+            self.x * number, 
+            self.y * number, 
+            self.z * number);
+        product_point
+    }
+
     /*
     pub fn copy(&self) -> LazPoint {
         let copy_point = LazPoint::new(
@@ -190,6 +198,53 @@ impl LazInfo {
             scaled_down_points:  scaled_point_vec})
     }
 
+    pub fn merge(&mut self, other_laz: &mut LazInfo) -> Result<(), Box<dyn std::error::Error>> {
+        let count_sum = self.point_count + other_laz.point_count;
+        let merged_highest = self.maximum_dimensions_point.get_highest_numbers_point(&other_laz.maximum_dimensions_point);
+        let merged_lowest = self.minimum_dimensions_point.get_lowest_numbers_point(&other_laz.minimum_dimensions_point);
+        let merged_mean = self.mean_dimensions_point.multiply_by_number(self.point_count as f64)
+            .add(&other_laz.mean_dimensions_point.multiply_by_number(other_laz.point_count as f64)).divide_by_number(count_sum as f64);
+
+        self.point_count = count_sum;
+        self.maximum_dimensions_point = merged_highest;
+        self.minimum_dimensions_point = merged_lowest;
+        self.mean_dimensions_point = merged_mean;
+        self.points.append(&mut other_laz.points);
+        //self.scaled_down_points.clear();
+        //self.scaled_down_points.reserve(count_sum);
+
+        // Recalculating new scaling for the points...
+        let range_x = self.maximum_dimensions_point.x - self.minimum_dimensions_point.x;
+        let range_y = self.maximum_dimensions_point.y - self.minimum_dimensions_point.y;
+        let range_z = self.maximum_dimensions_point.z - self.minimum_dimensions_point.z;
+
+        let max_range = range_x.max(range_y).max(range_z);
+
+        let scale = if max_range == 0.0 {1.0} else {max_range / 100.0};
+
+        let mut scaled_point_vec = self.points.clone();
+
+        /*
+        for unscaled_point in &mut scaled_point_vec {
+            unscaled_point.x = (unscaled_point.x - self.minimum_dimensions_point.x)/scale;
+            unscaled_point.y = (unscaled_point.y - self.minimum_dimensions_point.y)/scale;
+            unscaled_point.z = (unscaled_point.z - self.minimum_dimensions_point.z)/scale;
+        }
+        */
+        
+        // Parallelising this seems to actually increase the speed of the first merge by a few ms...
+        scaled_point_vec.par_iter_mut().for_each(|unscaled_point| {
+            unscaled_point.x = (unscaled_point.x - self.minimum_dimensions_point.x) / scale;
+            unscaled_point.y = (unscaled_point.y - self.minimum_dimensions_point.y) / scale;
+            unscaled_point.z = (unscaled_point.z - self.minimum_dimensions_point.z) / scale;
+        });
+
+        self.scaled_down_points = scaled_point_vec;
+
+
+        Ok(())
+    }
+
     pub fn default() -> LazInfo {
         let default = LazInfo{
             point_count: 0,
@@ -203,6 +258,7 @@ impl LazInfo {
     }
 
     pub fn print_to_text(&self) -> Result<(), Box<dyn std::error::Error>> {
+        /*
         let users_path = get_text_destination("Where do you want your LAZ text file placed?").unwrap();
         let output_path = match users_path.into_os_string().into_string() {
             Ok(string) => string.add("/laz_text.txt"),
@@ -210,10 +266,9 @@ impl LazInfo {
                 return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
             }
         };
-        /*
+        */
         let mut output_path = std::env::current_dir()?;
         output_path.push("laz_text.txt");
-        */
 
         let file = File::create(output_path)?;
         let mut writer = BufWriter::new(file);
@@ -230,6 +285,7 @@ impl LazInfo {
     }
 
     pub fn print_as_json(&self) -> Result<(), Box<dyn std::error::Error>> {
+        /*
         let users_path = get_text_destination("Where do you want your LAZ json file placed?").unwrap();
         let output_path = match users_path.into_os_string().into_string() {
             Ok(string) => string.add("/laz_json.json"),
@@ -237,10 +293,9 @@ impl LazInfo {
                 return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
             }
         };
-        /*
+        */
         let mut output_path = std::env::current_dir()?;
         output_path.push("laz_text.json");
-        */
 
         write_json(&self, &output_path)?;
 
