@@ -203,7 +203,6 @@ impl LazInfo {
     }
 
     pub fn print_to_text(&self) -> Result<(), Box<dyn std::error::Error>> {
-        /*
         let users_path = get_text_destination("Where do you want your LAZ text file placed?").unwrap();
         let output_path = match users_path.into_os_string().into_string() {
             Ok(string) => string.add("/laz_text.txt"),
@@ -211,9 +210,10 @@ impl LazInfo {
                 return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
             }
         };
-        */
+        /*
         let mut output_path = std::env::current_dir()?;
         output_path.push("laz_text.txt");
+        */
 
         let file = File::create(output_path)?;
         let mut writer = BufWriter::new(file);
@@ -230,7 +230,6 @@ impl LazInfo {
     }
 
     pub fn print_as_json(&self) -> Result<(), Box<dyn std::error::Error>> {
-        /*
         let users_path = get_text_destination("Where do you want your LAZ json file placed?").unwrap();
         let output_path = match users_path.into_os_string().into_string() {
             Ok(string) => string.add("/laz_json.json"),
@@ -238,9 +237,10 @@ impl LazInfo {
                 return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
             }
         };
-        */
+        /*
         let mut output_path = std::env::current_dir()?;
         output_path.push("laz_text.json");
+        */
 
         write_json(&self, &output_path)?;
 
