@@ -85,10 +85,12 @@ pub struct LazInfo {
 
 impl LazInfo {
     pub fn new() -> Result<LazInfo, Box<dyn std::error::Error>> {
-        //let mut reader = Reader::from_path(get_laz_file().unwrap())?;
+        let mut reader = Reader::from_path(get_laz_file().unwrap())?;
+        /*
         let mut current_path = std::env::current_dir()?;
         current_path.push("32-1-517-154-07.laz");
         let mut reader = Reader::from_path(current_path)?;
+        */
         let pd = reader.read_all()?;
 
         
@@ -198,6 +200,83 @@ impl LazInfo {
             scaled_down_points:  scaled_point_vec})
     }
 
+    pub fn new_with_path(path: PathBuf) -> Result<LazInfo, Box<dyn std::error::Error>> {
+        let mut reader = Reader::from_path(path)?;
+        let pd = reader.read_all()?;
+
+        
+        let point_vec:Vec<LazPoint> = pd.points()
+            .map(|p| LazPoint::from(p?))
+            .collect::<Result<Vec<_>, _>>()?;
+        let count = point_vec.len();
+
+        // The monstrosity below contributes in reducing the runtime of this program by about 40ms, which is incredibly significant.
+        // Figured a presentation of what exactly happens is in order...
+        // Rayon is a parallelisation crate (rust library) that allows one to iterate in parallel over lists such as vectors by utilising all the threads you got.
+        let stats = point_vec.par_iter()
+            // This here first stage is the fold. Rayon will divide the workload into chunks and pass it off to each thread.
+            // Each thread will then perform the operation enclosed in the "fold_op" parameter, basically finding the max, min, and total sum of every chunk.
+            .fold(
+            ||(
+                LazPoint::new(f64::MIN, f64::MIN, f64::MIN), // highest
+                LazPoint::new(f64::MAX, f64::MAX, f64::MAX), // lowest
+                LazPoint::new(0.0, 0.0, 0.0),               // sum
+            ),
+            |mut point_throuple: (LazPoint, LazPoint, LazPoint), point_from_vector: &LazPoint|{
+                point_throuple.0 = point_throuple.0.get_highest_numbers_point(point_from_vector);
+                point_throuple.1 = point_throuple.1.get_lowest_numbers_point(point_from_vector);
+                point_throuple.2 = point_throuple.2.add(point_from_vector);
+                point_throuple
+            })
+            // Once each thread is done, we "reduce" the chunks by performing an operation on whatever it is they returned.
+            // In this case, each thread comes back with a "throuple" (tuple containing 3 elements).
+            // We then operate on them in order to find the max, min and sum of ALL the threads.
+            // For thousands of points, the below would have to only compare a handful of numbers to find the wanted result.
+            .reduce(
+                || (
+                    LazPoint::new(f64::MIN, f64::MIN, f64::MIN),
+                    LazPoint::new(f64::MAX, f64::MAX, f64::MAX),
+                    LazPoint::new(0.0, 0.0, 0.0),
+                ), 
+                |mut another_point_throuple: (LazPoint, LazPoint, LazPoint), previous_point_throuple: (LazPoint, LazPoint, LazPoint)| {
+                    another_point_throuple.0 = another_point_throuple.0.get_highest_numbers_point(&previous_point_throuple.0);
+                    another_point_throuple.1 = another_point_throuple.1.get_lowest_numbers_point(&previous_point_throuple.1);
+                    another_point_throuple.2 = another_point_throuple.2.add(&previous_point_throuple.2);
+                    another_point_throuple
+                },
+            );
+        let (highest_point, lowest_point, total_sum) = stats;
+        
+        let range_x = highest_point.x - lowest_point.x;
+        let range_y = highest_point.y - lowest_point.y;
+        let range_z = highest_point.z - lowest_point.z;
+
+        let max_range = range_x.max(range_y).max(range_z);
+
+        let scale = if max_range == 0.0 {1.0} else {max_range / 100.0};
+
+        let mut scaled_point_vec = point_vec.clone();
+        
+        for unscaled_point in &mut scaled_point_vec {
+            unscaled_point.x = (unscaled_point.x - lowest_point.x)/scale;
+            unscaled_point.y = (unscaled_point.y - lowest_point.y)/scale;
+            unscaled_point.z = (unscaled_point.z - lowest_point.z)/scale;
+        }
+
+        let count_ref = &count;
+        let count_for_division = *count_ref as f64;
+
+        let mean_point = total_sum.divide_by_number(count_for_division);
+
+        Ok(LazInfo { 
+            point_count: count, 
+            maximum_dimensions_point: highest_point,
+            minimum_dimensions_point: lowest_point,
+            mean_dimensions_point: mean_point,
+            points: point_vec,
+            scaled_down_points:  scaled_point_vec})
+    }
+
     pub fn merge(&mut self, other_laz: &mut LazInfo) -> Result<(), Box<dyn std::error::Error>> {
         let count_sum = self.point_count + other_laz.point_count;
         let merged_highest = self.maximum_dimensions_point.get_highest_numbers_point(&other_laz.maximum_dimensions_point);
@@ -258,7 +337,6 @@ impl LazInfo {
     }
 
     pub fn print_to_text(&self) -> Result<(), Box<dyn std::error::Error>> {
-        /*
         let users_path = get_text_destination("Where do you want your LAZ text file placed?").unwrap();
         let output_path = match users_path.into_os_string().into_string() {
             Ok(string) => string.add("/laz_text.txt"),
@@ -266,9 +344,10 @@ impl LazInfo {
                 return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
             }
         };
-        */
+        /*
         let mut output_path = std::env::current_dir()?;
         output_path.push("laz_text.txt");
+        */
 
         let file = File::create(output_path)?;
         let mut writer = BufWriter::new(file);
@@ -285,7 +364,6 @@ impl LazInfo {
     }
 
     pub fn print_as_json(&self) -> Result<(), Box<dyn std::error::Error>> {
-        /*
         let users_path = get_text_destination("Where do you want your LAZ json file placed?").unwrap();
         let output_path = match users_path.into_os_string().into_string() {
             Ok(string) => string.add("/laz_json.json"),
@@ -293,9 +371,10 @@ impl LazInfo {
                 return Err(format!("User's output path contained invalid UTF-8: {:?}", os_string).into());
             }
         };
-        */
+        /* 
         let mut output_path = std::env::current_dir()?;
         output_path.push("laz_text.json");
+        */
 
         write_json(&self, &output_path)?;
 
