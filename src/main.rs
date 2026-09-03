@@ -57,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 else {
+                    processed_files.insert(other_selected_laz_file.clone());
                     println!("Selected laz filename: {:?}", other_filename);
                 }
 
