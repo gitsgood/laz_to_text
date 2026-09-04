@@ -216,8 +216,8 @@ impl LazInfo {
     pub fn default() -> LazInfo {
         let default = LazInfo{
             point_count: 0,
-            maximum_dimensions_point: LazPoint { x: 0.0, y: 0.0, z: 0.0 },
-            minimum_dimensions_point: LazPoint { x: 0.0, y: 0.0, z: 0.0 },
+            maximum_dimensions_point: LazPoint { x: f32::MIN, y: f32::MIN, z: f32::MIN },
+            minimum_dimensions_point: LazPoint { x: f32::MAX, y: f32::MAX, z: f32::MAX },
             mean_dimensions_point: LazPoint { x: 0.0, y: 0.0, z: 0.0 },
             points: vec![],
             scaled_down_points: vec![]
@@ -260,12 +260,10 @@ impl LazInfo {
 }
 
 pub fn process_laz_list(list: Vec<LazInfo>) -> Result<LazInfo, Box<dyn std::error::Error>> {
-    //let mut final_laz_info = LazInfo::default();
-    /*     
+/*     let mut final_laz_info = LazInfo::default();
     for mut little_laz in list {
         final_laz_info.merge(&mut little_laz)?;
-    } 
-    */
+    }  */
     let final_laz_info = list.into_par_iter().reduce(
         || LazInfo::default(), 
         |mut laz_a, mut laz_b|{
