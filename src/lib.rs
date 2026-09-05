@@ -95,11 +95,13 @@ impl LazPoint32 {
 #[derive(Serialize)]
 pub struct LazInfo {
     pub point_count: usize,
-    pub maximum_dimensions_point: LazPoint,
-    pub minimum_dimensions_point: LazPoint,
-    pub mean_dimensions_point: LazPoint,
-    pub points: Vec<LazPoint>,
-    pub scaled_down_points: Vec<LazPoint>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_dimensions_point: Option<LazPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_dimensions_point: Option<LazPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_dimensions_point: Option<LazPoint>,
+    pub points: Vec<LazPoint>
 }
 
 impl LazInfo {
@@ -119,41 +121,28 @@ impl LazInfo {
         let lowest_point = LazPoint::new(f64::MAX, f64::MAX, f64::MAX);
         let mean_point = LazPoint::new(0.0, 0.0, 0.0);
 
-        let scaled_point_vec: Vec<LazPoint> = vec![];   
-
         Ok(LazInfo { 
-            point_count: count, 
-            maximum_dimensions_point: highest_point,
-            minimum_dimensions_point: lowest_point,
-            mean_dimensions_point: mean_point,
-            points: point_vec,
-            scaled_down_points:  scaled_point_vec})
+            point_count: count,
+            maximum_dimensions_point: Some(highest_point),
+            minimum_dimensions_point: Some(lowest_point),
+            mean_dimensions_point: Some(mean_point),
+            points: point_vec})
     }
 
     pub fn merge(&mut self, other_laz: &mut LazInfo) -> Result<(), Box<dyn std::error::Error>> {
         let count_sum = self.point_count + other_laz.point_count;
-        let merged_highest = self.maximum_dimensions_point.get_highest_numbers_point(&other_laz.maximum_dimensions_point);
-        let merged_lowest = self.minimum_dimensions_point.get_lowest_numbers_point(&other_laz.minimum_dimensions_point);
-        let merged_mean = self.mean_dimensions_point.multiply_by_number(self.point_count as f64)
-            .add(&other_laz.mean_dimensions_point.multiply_by_number(other_laz.point_count as f64)).divide_by_number(count_sum as f64);
-
         self.point_count = count_sum;
-        self.maximum_dimensions_point = merged_highest;
-        self.minimum_dimensions_point = merged_lowest;
-        self.mean_dimensions_point = merged_mean;
+
         self.points.append(&mut other_laz.points);
-        //self.scaled_down_points.clear();
-        //self.scaled_down_points.reserve(count_sum);
-        self.scaled_down_points = vec![];
 
         Ok(())
     }
 
     pub fn generate_scaled_points(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Calculating new scaling for the points...
-        let range_x = self.maximum_dimensions_point.x - self.minimum_dimensions_point.x;
-        let range_y = self.maximum_dimensions_point.y - self.minimum_dimensions_point.y;
-        let range_z = self.maximum_dimensions_point.z - self.minimum_dimensions_point.z;
+        let range_x = self.maximum_dimensions_point.unwrap().x - self.minimum_dimensions_point.unwrap().x;
+        let range_y = self.maximum_dimensions_point.unwrap().y - self.minimum_dimensions_point.unwrap().y;
+        let range_z = self.maximum_dimensions_point.unwrap().z - self.minimum_dimensions_point.unwrap().z;
 
         let max_range = range_x.max(range_y).max(range_z);
 
@@ -171,12 +160,15 @@ impl LazInfo {
         
         // Parallelising this seems to actually increase the speed of the first merge by a few ms...
         scaled_point_vec.par_iter_mut().for_each(|unscaled_point| {
-            unscaled_point.x = (unscaled_point.x - self.minimum_dimensions_point.x) / scale;
-            unscaled_point.y = (unscaled_point.y - self.minimum_dimensions_point.y) / scale;
-            unscaled_point.z = (unscaled_point.z - self.minimum_dimensions_point.z) / scale;
+            unscaled_point.x = (unscaled_point.x - self.minimum_dimensions_point.unwrap().x) / scale;
+            unscaled_point.y = (unscaled_point.y - self.minimum_dimensions_point.unwrap().y) / scale;
+            unscaled_point.z = (unscaled_point.z - self.minimum_dimensions_point.unwrap().z) / scale;
         });
 
-        self.scaled_down_points = scaled_point_vec;
+        self.points = scaled_point_vec;
+        self.maximum_dimensions_point = None;
+        self.minimum_dimensions_point = None;
+        self.mean_dimensions_point = None;
 
         Ok(())
     }
@@ -222,9 +214,9 @@ impl LazInfo {
         let count_for_division = self.point_count as f64;
         let mean_point = total_sum.divide_by_number(count_for_division);
 
-        self.maximum_dimensions_point = highest_point;
-        self.minimum_dimensions_point = lowest_point;
-        self.mean_dimensions_point = mean_point;
+        self.maximum_dimensions_point = Some(highest_point);
+        self.minimum_dimensions_point = Some(lowest_point);
+        self.mean_dimensions_point = Some(mean_point);
 
         Ok(())
     }
@@ -232,11 +224,10 @@ impl LazInfo {
     pub fn default() -> LazInfo {
         let default = LazInfo{
             point_count: 0,
-            maximum_dimensions_point: LazPoint { x: f64::MIN, y: f64::MIN, z: f64::MIN },
-            minimum_dimensions_point: LazPoint { x: f64::MAX, y: f64::MAX, z: f64::MAX },
-            mean_dimensions_point: LazPoint { x: 0.0, y: 0.0, z: 0.0 },
-            points: vec![],
-            scaled_down_points: vec![]
+            maximum_dimensions_point: Some(LazPoint { x: f64::MIN, y: f64::MIN, z: f64::MIN }),
+            minimum_dimensions_point: Some(LazPoint { x: f64::MAX, y: f64::MAX, z: f64::MAX }),
+            mean_dimensions_point: Some(LazPoint { x: 0.0, y: 0.0, z: 0.0 }),
+            points: vec![]
         };
         default
     }
@@ -266,7 +257,7 @@ impl LazInfo {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
 
-        for chunk in self.scaled_down_points.chunks(10000) {
+        for chunk in self.points.chunks(10000) {
             let mut f32_chunk: Vec<LazPoint32> = chunk.iter().map(|point|point.get_as_f32()).collect();
             f32_chunk.iter_mut().for_each(|point|point.vulkan_axis_swap().unwrap());
 
@@ -440,7 +431,7 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
 
     loop 
     {
-        match user_querry("------------------------------\nDo you wish to process a single LAZ, or multiple ones?\n1: Just one\n2:A few (same folder)\nElse:ALL of them")? {
+        match user_querry("------------------------------\nDo you wish to process a single LAZ, or multiple ones?\n1: Just one\n2: A few (same folder)\nElse: ALL of them (recusive folder search)")? {
             1 => {selected_files_list.push(get_laz_file().unwrap());}
             2 => {selected_files_list.append(&mut get_laz_files()?);}
             _ => {selected_files_list.append(&mut get_file_list(get_folder("Select the folder you wish to recursively scour for LAZ files?", None).unwrap())?);}
@@ -465,8 +456,10 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
     // Calculating statistical points ONCE
     time_it("Calculating statistical points...", || {laz_info.generate_stat_points()})?;
     
-    // Generating the scaled vector of points
-    time_it("Generating scaled vector of points...", || {laz_info.generate_scaled_points()})?;
+    match user_querry("------------------------------\nDo you wish to scale and translate the points such that the volume they occupy is smaller (they are closer together) and they begin at x = 0 and z = 0 in your renderer?\n1: Yes\nElse: No thanks, I got that covered my own way")? {
+        1 => {time_it("Translating and scaling points...", || {laz_info.generate_scaled_points()})?;}
+        _ => {println!("Keeping the points as is.\nIf you print the data as json, it will include the fields:\n-'maximum_dimensions_point'\n-'minimum_dimensions_point'\n-'mean_dimensions_point'\nThey ought to help with your calculations ;)\nProceeding...")}
+    }
 
     loop 
     {
