@@ -8,21 +8,21 @@ pub mod constants;
 
 pub use constants::*;
 
-#[repr(C)] // Ensures C-compatible memory layout
-#[derive(Serialize, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+
+#[derive(Serialize, Clone, Copy)]
 pub struct LazPoint {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32
+    pub x: f64,
+    pub y: f64,
+    pub z: f64
 }
 
 impl LazPoint {
     pub fn from(input: Point) -> Result<LazPoint, Box<dyn std::error::Error>> {
-        let parsed_point = LazPoint { x: (input.x as f32), y: (input.y as f32), z: (input.z as f32) };
+        let parsed_point = LazPoint { x: (input.x as f64), y: (input.y as f64), z: (input.z as f64) };
         Ok(parsed_point)
     }
 
-    pub fn new(in_x: f32, in_y: f32, in_z: f32) -> LazPoint {
+    pub fn new(in_x: f64, in_y: f64, in_z: f64) -> LazPoint {
         let new_point: LazPoint = LazPoint { x: (in_x), y: (in_y), z: (in_z) };
         new_point
     }
@@ -51,7 +51,7 @@ impl LazPoint {
         sum_point
     }
 
-    pub fn divide_by_number(&self, number: f32) -> LazPoint {
+    pub fn divide_by_number(&self, number: f64) -> LazPoint {
         let quotient_point = LazPoint::new(
             self.x / number, 
             self.y / number, 
@@ -59,12 +59,36 @@ impl LazPoint {
         quotient_point
     }
 
-    pub fn multiply_by_number(&self, number: f32) -> LazPoint {
+    pub fn multiply_by_number(&self, number: f64) -> LazPoint {
         let product_point = LazPoint::new(
             self.x * number, 
             self.y * number, 
             self.z * number);
         product_point
+    }
+
+    pub fn get_as_f32(&self) -> LazPoint32 {
+        let number_throuple = LazPoint32{x: self.x as f32, y: self.y as f32, z: self.z as f32};
+        number_throuple
+    }
+}
+
+#[repr(C)] // Ensures C-compatible memory layout
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LazPoint32 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32
+}
+
+impl LazPoint32 {
+    pub fn vulkan_axis_swap(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let corrected_y = self.z;
+        let corrected_z = -self.y;
+
+        self.y = corrected_y;
+        self.z = corrected_z;
+        Ok(())
     }
 }
 
@@ -79,83 +103,23 @@ pub struct LazInfo {
 }
 
 impl LazInfo {
-    pub fn new_with_path(path: PathBuf) -> Result<LazInfo, Box<dyn std::error::Error>> {
+    pub fn new_with_path<P :AsRef<Path>>(path: P) -> Result<LazInfo, Box<dyn std::error::Error>> {
         let mut reader = Reader::from_path(path)?;
         let pd = reader.read_all()?;
-
         
-        let point_vec:Vec<LazPoint> = pd.points()
-            .map(|p| LazPoint::from(p?))
-            .collect::<Result<Vec<_>, _>>()?         
-            // Here we make sure that the x y z fields match the order vulkan's glm::vec3 struct.
-            // A user taking this data wouldn't need to switch it up when rendering it later on.   
-            .par_iter()
-            .map(|p| LazPoint {
-                x : p.x,
-                y : p.z,
-                z : -p.y
-            }).collect::<Vec<LazPoint>>();
-
+        let count = pd.len();
         
-        let count = point_vec.len();
+        let mut point_vec:Vec<LazPoint> = Vec::with_capacity(count);
 
-        // The monstrosity below contributes in reducing the runtime of this program by about 40ms, which is incredibly significant.
-        // Figured a presentation of what exactly happens is in order...
-        // Rayon is a parallelisation crate (rust library) that allows one to iterate in parallel over lists such as vectors by utilising all the threads you got.
-        let stats = point_vec.par_iter()
-            // This here first stage is the fold. Rayon will divide the workload into chunks and pass it off to each thread.
-            // Each thread will then perform the operation enclosed in the "fold_op" parameter, basically finding the max, min, and total sum of every chunk.
-            .fold(
-            ||(
-                LazPoint::new(f32::MIN, f32::MIN, f32::MIN), // highest
-                LazPoint::new(f32::MAX, f32::MAX, f32::MAX), // lowest
-                LazPoint::new(0.0, 0.0, 0.0),               // sum
-            ),
-            |mut point_throuple: (LazPoint, LazPoint, LazPoint), point_from_vector: &LazPoint|{
-                point_throuple.0 = point_throuple.0.get_highest_numbers_point(point_from_vector);
-                point_throuple.1 = point_throuple.1.get_lowest_numbers_point(point_from_vector);
-                point_throuple.2 = point_throuple.2.add(point_from_vector);
-                point_throuple
-            })
-            // Once each thread is done, we "reduce" the chunks by performing an operation on whatever it is they returned.
-            // In this case, each thread comes back with a "throuple" (tuple containing 3 elements).
-            // We then operate on them in order to find the max, min and sum of ALL the threads.
-            // For thousands of points, the below would have to only compare a handful of numbers to find the wanted result.
-            .reduce(
-                || (
-                    LazPoint::new(f32::MIN, f32::MIN, f32::MIN),
-                    LazPoint::new(f32::MAX, f32::MAX, f32::MAX),
-                    LazPoint::new(0.0, 0.0, 0.0),
-                ), 
-                |mut another_point_throuple: (LazPoint, LazPoint, LazPoint), previous_point_throuple: (LazPoint, LazPoint, LazPoint)| {
-                    another_point_throuple.0 = another_point_throuple.0.get_highest_numbers_point(&previous_point_throuple.0);
-                    another_point_throuple.1 = another_point_throuple.1.get_lowest_numbers_point(&previous_point_throuple.1);
-                    another_point_throuple.2 = another_point_throuple.2.add(&previous_point_throuple.2);
-                    another_point_throuple
-                },
-            );
-        let (highest_point, lowest_point, total_sum) = stats;
-        
-        let range_x = highest_point.x - lowest_point.x;
-        let range_y = highest_point.y - lowest_point.y;
-        let range_z = highest_point.z - lowest_point.z;
-
-        let max_range = range_x.max(range_y).max(range_z);
-
-        let scale = if max_range == 0.0 {1.0} else {max_range / 100.0};
-
-        let mut scaled_point_vec = point_vec.clone();
-        
-        for unscaled_point in &mut scaled_point_vec {
-            unscaled_point.x = (unscaled_point.x - lowest_point.x)/scale;
-            unscaled_point.y = (unscaled_point.y - lowest_point.y)/scale;
-            unscaled_point.z = (unscaled_point.z - lowest_point.z)/scale;
+        for point in pd.points() {
+            point_vec.push(LazPoint::from(point?)?);
         }
 
-        let count_ref = &count;
-        let count_for_division = *count_ref as f32;
+        let highest_point = LazPoint::new(f64::MIN, f64::MIN, f64::MIN);
+        let lowest_point = LazPoint::new(f64::MAX, f64::MAX, f64::MAX);
+        let mean_point = LazPoint::new(0.0, 0.0, 0.0);
 
-        let mean_point = total_sum.divide_by_number(count_for_division);
+        let scaled_point_vec: Vec<LazPoint> = vec![];   
 
         Ok(LazInfo { 
             point_count: count, 
@@ -170,8 +134,8 @@ impl LazInfo {
         let count_sum = self.point_count + other_laz.point_count;
         let merged_highest = self.maximum_dimensions_point.get_highest_numbers_point(&other_laz.maximum_dimensions_point);
         let merged_lowest = self.minimum_dimensions_point.get_lowest_numbers_point(&other_laz.minimum_dimensions_point);
-        let merged_mean = self.mean_dimensions_point.multiply_by_number(self.point_count as f32)
-            .add(&other_laz.mean_dimensions_point.multiply_by_number(other_laz.point_count as f32)).divide_by_number(count_sum as f32);
+        let merged_mean = self.mean_dimensions_point.multiply_by_number(self.point_count as f64)
+            .add(&other_laz.mean_dimensions_point.multiply_by_number(other_laz.point_count as f64)).divide_by_number(count_sum as f64);
 
         self.point_count = count_sum;
         self.maximum_dimensions_point = merged_highest;
@@ -180,8 +144,13 @@ impl LazInfo {
         self.points.append(&mut other_laz.points);
         //self.scaled_down_points.clear();
         //self.scaled_down_points.reserve(count_sum);
+        self.scaled_down_points = vec![];
 
-        // Recalculating new scaling for the points...
+        Ok(())
+    }
+
+    pub fn generate_scaled_points(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Calculating new scaling for the points...
         let range_x = self.maximum_dimensions_point.x - self.minimum_dimensions_point.x;
         let range_y = self.maximum_dimensions_point.y - self.minimum_dimensions_point.y;
         let range_z = self.maximum_dimensions_point.z - self.minimum_dimensions_point.z;
@@ -209,6 +178,53 @@ impl LazInfo {
 
         self.scaled_down_points = scaled_point_vec;
 
+        Ok(())
+    }
+
+    pub fn generate_stat_points(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // The monstrosity below contributes in reducing the runtime of this program by about 40ms, which is incredibly significant.
+        // Figured a presentation of what exactly happens is in order...
+        // Rayon is a parallelisation crate (rust library) that allows one to iterate in parallel over lists such as vectors by utilising all the threads you got.
+        let stats = self.points.par_iter()
+            // This here first stage is the fold. Rayon will divide the workload into chunks and pass it off to each thread.
+            // Each thread will then perform the operation enclosed in the "fold_op" parameter, basically finding the max, min, and total sum of every chunk.
+            .fold(
+            ||(
+                LazPoint::new(f64::MIN, f64::MIN, f64::MIN), // highest
+                LazPoint::new(f64::MAX, f64::MAX, f64::MAX), // lowest
+                LazPoint::new(0.0, 0.0, 0.0),               // sum
+            ),
+            |mut point_throuple: (LazPoint, LazPoint, LazPoint), point_from_vector: &LazPoint|{
+                point_throuple.0 = point_throuple.0.get_highest_numbers_point(point_from_vector);
+                point_throuple.1 = point_throuple.1.get_lowest_numbers_point(point_from_vector);
+                point_throuple.2 = point_throuple.2.add(point_from_vector);
+                point_throuple
+            })
+            // Once each thread is done, we "reduce" the chunks by performing an operation on whatever it is they returned.
+            // In this case, each thread comes back with a "throuple" (tuple containing 3 elements).
+            // We then operate on them in order to find the max, min and sum of ALL the threads.
+            // For thousands of points, the below would have to only compare a handful of numbers to find the wanted result.
+            .reduce(
+                || (
+                    LazPoint::new(f64::MIN, f64::MIN, f64::MIN),
+                    LazPoint::new(f64::MAX, f64::MAX, f64::MAX),
+                    LazPoint::new(0.0, 0.0, 0.0),
+                ), 
+                |mut another_point_throuple: (LazPoint, LazPoint, LazPoint), previous_point_throuple: (LazPoint, LazPoint, LazPoint)| {
+                    another_point_throuple.0 = another_point_throuple.0.get_highest_numbers_point(&previous_point_throuple.0);
+                    another_point_throuple.1 = another_point_throuple.1.get_lowest_numbers_point(&previous_point_throuple.1);
+                    another_point_throuple.2 = another_point_throuple.2.add(&previous_point_throuple.2);
+                    another_point_throuple
+                },
+            );
+        let (highest_point, lowest_point, total_sum) = stats;
+
+        let count_for_division = self.point_count as f64;
+        let mean_point = total_sum.divide_by_number(count_for_division);
+
+        self.maximum_dimensions_point = highest_point;
+        self.minimum_dimensions_point = lowest_point;
+        self.mean_dimensions_point = mean_point;
 
         Ok(())
     }
@@ -216,8 +232,8 @@ impl LazInfo {
     pub fn default() -> LazInfo {
         let default = LazInfo{
             point_count: 0,
-            maximum_dimensions_point: LazPoint { x: f32::MIN, y: f32::MIN, z: f32::MIN },
-            minimum_dimensions_point: LazPoint { x: f32::MAX, y: f32::MAX, z: f32::MAX },
+            maximum_dimensions_point: LazPoint { x: f64::MIN, y: f64::MIN, z: f64::MIN },
+            minimum_dimensions_point: LazPoint { x: f64::MAX, y: f64::MAX, z: f64::MAX },
             mean_dimensions_point: LazPoint { x: 0.0, y: 0.0, z: 0.0 },
             points: vec![],
             scaled_down_points: vec![]
@@ -250,20 +266,20 @@ impl LazInfo {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
 
-        // Cast the slice of Points into a slice of bytes ([u8])
-        let bytes: &[u8] = bytemuck::cast_slice(&self.scaled_down_points);
+        for chunk in self.scaled_down_points.chunks(10000) {
+            let mut f32_chunk: Vec<LazPoint32> = chunk.iter().map(|point|point.get_as_f32()).collect();
+            f32_chunk.iter_mut().for_each(|point|point.vulkan_axis_swap().unwrap());
 
-        writer.write_all(bytes)?;
+            let bytes: &[u8] = bytemuck::cast_slice(&f32_chunk);
+            writer.write_all(bytes)?;
+        }
 
+        writer.flush()?;
         Ok(())
     }
 }
 
 pub fn process_laz_list(list: Vec<LazInfo>) -> Result<LazInfo, Box<dyn std::error::Error>> {
-/*     let mut final_laz_info = LazInfo::default();
-    for mut little_laz in list {
-        final_laz_info.merge(&mut little_laz)?;
-    }  */
     let final_laz_info = list.into_par_iter().reduce(
         || LazInfo::default(), 
         |mut laz_a, mut laz_b|{
@@ -440,11 +456,17 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
 
     //time_it("Processing all the LAZ files...", || {unique_files_list.iter().for_each(|laz_path| lazes_info.push(LazInfo::new_with_path(laz_path.to_owned()).unwrap()))});
     time_it("Processing all the LAZ files...", || {
-        let results: Vec<LazInfo> = unique_files_list.par_iter().map(|laz_path| {LazInfo::new_with_path(laz_path.to_owned()).expect("Couldn't read the laz")}).collect();
+        let results: Vec<LazInfo> = unique_files_list.par_iter().map(|laz_path| {LazInfo::new_with_path(laz_path).expect("Couldn't read the laz")}).collect();
         lazes_info.extend(results);
     });
 
-    let laz_info = time_it("Merging the LAZ data into a coherent whole...", || { process_laz_list(lazes_info)})?;
+    let mut laz_info = time_it("Merging the LAZ data into a coherent whole...", || { process_laz_list(lazes_info)})?;
+
+    // Calculating statistical points ONCE
+    time_it("Calculating statistical points...", || {laz_info.generate_stat_points()})?;
+    
+    // Generating the scaled vector of points
+    time_it("Generating scaled vector of points...", || {laz_info.generate_scaled_points()})?;
 
     loop 
     {
