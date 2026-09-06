@@ -13,17 +13,18 @@ pub use constants::*;
 pub struct LazPoint {
     pub x: f64,
     pub y: f64,
-    pub z: f64
+    pub z: f64,
+    pub intensity: u16
 }
 
 impl LazPoint {
-    pub fn from(input: Point) -> Result<LazPoint, Box<dyn std::error::Error>> {
-        let parsed_point = LazPoint { x: (input.x as f64), y: (input.y as f64), z: (input.z as f64) };
+    pub fn from(input: &Point) -> Result<LazPoint, Box<dyn std::error::Error>> {
+        let parsed_point = LazPoint { x: (input.x as f64), y: (input.y as f64), z: (input.z as f64), intensity: (input.intensity) };
         Ok(parsed_point)
     }
 
     pub fn new(in_x: f64, in_y: f64, in_z: f64) -> LazPoint {
-        let new_point: LazPoint = LazPoint { x: (in_x), y: (in_y), z: (in_z) };
+        let new_point: LazPoint = LazPoint { x: (in_x), y: (in_y), z: (in_z), intensity: 0 as u16 };
         new_point
     }
 
@@ -68,7 +69,7 @@ impl LazPoint {
     }
 
     pub fn get_as_f32(&self) -> LazPoint32 {
-        let number_throuple = LazPoint32{x: self.x as f32, y: self.y as f32, z: self.z as f32};
+        let number_throuple = LazPoint32{x: self.x as f32, y: self.y as f32, z: self.z as f32, i: self.intensity as f32 / u16::MAX as f32};
         number_throuple
     }
 }
@@ -78,7 +79,8 @@ impl LazPoint {
 pub struct LazPoint32 {
     pub x: f32,
     pub y: f32,
-    pub z: f32
+    pub z: f32,
+    pub i: f32
 }
 
 impl LazPoint32 {
@@ -113,9 +115,20 @@ impl LazInfo {
         
         let mut point_vec:Vec<LazPoint> = Vec::with_capacity(count);
 
+        let mut attribute_count: u32 = 0;
+        let mut current_intensity: u16 = 0;
         for point in pd.points() {
-            point_vec.push(LazPoint::from(point?)?);
+            let p = point?;
+
+            point_vec.push(LazPoint::from(&p)?);
+
+            if p.intensity != current_intensity {
+                //println!("No intensity value given...");
+                attribute_count += 1;
+                current_intensity = p.intensity;
+            }
         }
+        println!("Total points: {}\nPoints with differing intensity: {}", count, attribute_count);
 
         let highest_point = LazPoint::new(f64::MIN, f64::MIN, f64::MIN);
         let lowest_point = LazPoint::new(f64::MAX, f64::MAX, f64::MAX);
@@ -224,9 +237,9 @@ impl LazInfo {
     pub fn default() -> LazInfo {
         let default = LazInfo{
             point_count: 0,
-            maximum_dimensions_point: Some(LazPoint { x: f64::MIN, y: f64::MIN, z: f64::MIN }),
-            minimum_dimensions_point: Some(LazPoint { x: f64::MAX, y: f64::MAX, z: f64::MAX }),
-            mean_dimensions_point: Some(LazPoint { x: 0.0, y: 0.0, z: 0.0 }),
+            maximum_dimensions_point: Some(LazPoint { x: f64::MIN, y: f64::MIN, z: f64::MIN, intensity: 0 }),
+            minimum_dimensions_point: Some(LazPoint { x: f64::MAX, y: f64::MAX, z: f64::MAX, intensity: 0 }),
+            mean_dimensions_point: Some(LazPoint { x: 0.0, y: 0.0, z: 0.0, intensity: 0 }),
             points: vec![]
         };
         default
