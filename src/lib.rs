@@ -8,6 +8,8 @@ pub mod constants;
 
 pub use constants::*;
 
+use crate::PointVector::{Casted, Uncasted};
+
 
 #[derive(Serialize, Clone, Copy)]
 pub struct LazPoint {
@@ -75,7 +77,7 @@ impl LazPoint {
 }
 
 #[repr(C)] // Ensures C-compatible memory layout
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Serialize, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LazPoint32 {
     pub x: f32,
     pub y: f32,
@@ -94,6 +96,63 @@ impl LazPoint32 {
     }
 }
 
+#[derive(Serialize, Clone)]
+#[serde(untagged)]
+pub enum PointVector {
+    Uncasted(Vec<LazPoint>),
+    Casted(Vec<LazPoint32>),
+}
+
+impl PointVector {
+    pub fn cast(&self) -> Result<Vec<LazPoint32>, Box<dyn std::error::Error>> {
+        match self {
+            Uncasted(s) => {
+                let mut casted_points: Vec<LazPoint32> = vec![];
+                casted_points.reserve(s.len());
+                for point in s {
+                    casted_points.push(point.get_as_f32());
+                }
+                Ok(casted_points)
+            }
+            Casted(s) => Ok(s.to_vec())
+        }
+    }
+
+    pub fn cast_self(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let new_self = self.cast()?;
+        *self = Casted(new_self);
+        Ok(())
+    }
+
+    pub fn get(&self) -> Result<&Vec<LazPoint>, Box<dyn std::error::Error>> {
+        match &self {
+            Uncasted(u) => Ok(u),
+            _ => return Err("Points aren't supposed to be casted at this stage...".into())
+        }
+    }
+
+    pub fn get_mut(&mut self) -> Result<&mut Vec<LazPoint>, Box<dyn std::error::Error>> {
+        match self {
+            Uncasted(u) => Ok(u),
+            _ => return Err("Points aren't supposed to be casted at this stage...".into())
+        }
+    }
+
+    pub fn get_casted(&self) -> Result<&Vec<LazPoint32>, Box<dyn std::error::Error>> {
+        match &self {
+            Casted(u) => Ok(u),
+            _ => return Err("Points aren't supposed to be uncasted at this stage...".into())
+        }
+    }
+
+    pub fn get_casted_mut(&mut self) -> Result<&mut Vec<LazPoint32>, Box<dyn std::error::Error>> {
+        match self {
+            Casted(u) => Ok(u),
+            _ => return Err("Points aren't supposed to be uncasted at this stage...".into())
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct LazInfo {
     pub point_count: usize,
@@ -103,7 +162,7 @@ pub struct LazInfo {
     pub minimum_dimensions_point: Option<LazPoint>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mean_dimensions_point: Option<LazPoint>,
-    pub points: Vec<LazPoint>
+    pub points: PointVector
 }
 
 impl LazInfo {
@@ -115,20 +174,11 @@ impl LazInfo {
         
         let mut point_vec:Vec<LazPoint> = Vec::with_capacity(count);
 
-        let mut attribute_count: u32 = 0;
-        let mut current_intensity: u16 = 0;
         for point in pd.points() {
             let p = point?;
 
             point_vec.push(LazPoint::from(&p)?);
-
-            if p.intensity != current_intensity {
-                //println!("No intensity value given...");
-                attribute_count += 1;
-                current_intensity = p.intensity;
-            }
         }
-        println!("Total points: {}\nPoints with differing intensity: {}", count, attribute_count);
 
         let highest_point = LazPoint::new(f64::MIN, f64::MIN, f64::MIN);
         let lowest_point = LazPoint::new(f64::MAX, f64::MAX, f64::MAX);
@@ -139,14 +189,14 @@ impl LazInfo {
             maximum_dimensions_point: Some(highest_point),
             minimum_dimensions_point: Some(lowest_point),
             mean_dimensions_point: Some(mean_point),
-            points: point_vec})
+            points: PointVector::Uncasted(point_vec)})
     }
 
     pub fn merge(&mut self, other_laz: &mut LazInfo) -> Result<(), Box<dyn std::error::Error>> {
         let count_sum = self.point_count + other_laz.point_count;
         self.point_count = count_sum;
 
-        self.points.append(&mut other_laz.points);
+        self.points.get_mut()?.append(other_laz.points.get_mut()?);
 
         Ok(())
     }
@@ -161,7 +211,7 @@ impl LazInfo {
 
         let scale = if max_range == 0.0 {1.0} else {max_range / 100.0};
 
-        let mut scaled_point_vec = self.points.clone();
+        let scaled_point_vec = self.points.get_mut()?;
 
         /*
         for unscaled_point in &mut scaled_point_vec {
@@ -178,7 +228,7 @@ impl LazInfo {
             unscaled_point.z = (unscaled_point.z - self.minimum_dimensions_point.unwrap().z) / scale;
         });
 
-        self.points = scaled_point_vec;
+        self.points = Uncasted(scaled_point_vec.clone());
         self.maximum_dimensions_point = None;
         self.minimum_dimensions_point = None;
         self.mean_dimensions_point = None;
@@ -190,7 +240,7 @@ impl LazInfo {
         // The monstrosity below contributes in reducing the runtime of this program by about 40ms, which is incredibly significant.
         // Figured a presentation of what exactly happens is in order...
         // Rayon is a parallelisation crate (rust library) that allows one to iterate in parallel over lists such as vectors by utilising all the threads you got.
-        let stats = self.points.par_iter()
+        let stats = self.points.get()?.par_iter()
             // This here first stage is the fold. Rayon will divide the workload into chunks and pass it off to each thread.
             // Each thread will then perform the operation enclosed in the "fold_op" parameter, basically finding the max, min, and total sum of every chunk.
             .fold(
@@ -240,7 +290,7 @@ impl LazInfo {
             maximum_dimensions_point: Some(LazPoint { x: f64::MIN, y: f64::MIN, z: f64::MIN, intensity: 0 }),
             minimum_dimensions_point: Some(LazPoint { x: f64::MAX, y: f64::MAX, z: f64::MAX, intensity: 0 }),
             mean_dimensions_point: Some(LazPoint { x: 0.0, y: 0.0, z: 0.0, intensity: 0 }),
-            points: vec![]
+            points: Uncasted(vec![])
         };
         default
     }
@@ -251,8 +301,10 @@ impl LazInfo {
 
         writeln!(writer, "{}" ,&self.point_count)?;
 
-        for point in &self.points {
-            writeln!(writer, "{:.2}\t{:.2}\t{:.2}", point.x, point.y, point.z)?;
+        let points_to_write = self.points.cast()?;
+
+        for point in points_to_write {
+            writeln!(writer, "{:.2}\t{:.2}\t{:.2}\t{:.2}", point.x, point.y, point.z, point.i)?;
         }
 
         writer.flush()?;
@@ -260,19 +312,22 @@ impl LazInfo {
         Ok(())
     }
 
-    pub fn print_as_json<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn print_as_json<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        self.points.cast_self()?;
         write_json(&self, path)?;
 
         Ok(())
     }
 
     pub fn print_as_binary<P :AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let point_vec = self.points.cast()?;
+
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
 
-        for chunk in self.points.chunks(10000) {
-            let mut f32_chunk: Vec<LazPoint32> = chunk.iter().map(|point|point.get_as_f32()).collect();
-            f32_chunk.iter_mut().for_each(|point|point.vulkan_axis_swap().unwrap());
+        for f32_chunk in point_vec.chunks(10000) {
+            //let mut f32_chunk: Vec<LazPoint32> = chunk.iter().map(|point|point.get_as_f32()).collect();
+            //f32_chunk.iter_mut().for_each(|point|point.vulkan_axis_swap().unwrap());
 
             let bytes: &[u8] = bytemuck::cast_slice(&f32_chunk);
             writer.write_all(bytes)?;
@@ -473,6 +528,10 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
         1 => {time_it("Translating and scaling points...", || {laz_info.generate_scaled_points()})?;}
         _ => {println!("Keeping the points as is.\nIf you print the data as json, it will include the fields:\n-'maximum_dimensions_point'\n-'minimum_dimensions_point'\n-'mean_dimensions_point'\nThey ought to help with your calculations ;)\nProceeding...")}
     }
+
+    time_it("Casting to f32 for glm::vec3 compat", || {laz_info.points.cast_self()})?;
+
+    time_it("Performing axis swap for correct vulkan rendering...", || {laz_info.points.get_casted_mut().unwrap().iter_mut().for_each(|point|point.vulkan_axis_swap().unwrap())});
 
     loop 
     {
