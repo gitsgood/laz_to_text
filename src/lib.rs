@@ -362,7 +362,7 @@ pub fn print_as_obj<P: AsRef<Path>>(&self, path: P, max_edge_length: f64) -> Res
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
 
-    // 2. Write Vertices (Lifting to Vulkan Space)
+    // 2. Write Vertices
     for p in &points_f64 {
         //writeln!(writer, "v {:.6} {:.6} {:.6}", p.x, p.z, -p.y)?;
         //writeln!(writer, "v {:.6} {:.6} {:.6}", p.y, p.z, -p.x)?;
@@ -370,7 +370,7 @@ pub fn print_as_obj<P: AsRef<Path>>(&self, path: P, max_edge_length: f64) -> Res
         writeln!(writer, "v {:.6} {:.6} {:.6}", p.x, p.y, p.z)?;
     }
 
-    // 3. FILTERED TRIANGULATION
+    // 3. FILTERED TRIANGULATION (writing the triangle faces, filtering out long ass edge lengths)
     for i in (0..result.triangles.len()).step_by(3) {
         let idx_a = result.triangles[i];
         let idx_b = result.triangles[i + 1];
@@ -699,7 +699,7 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
                 println!("You selected obj...");
                 let output_path = get_folder("Where do you want your LAZ obj file placed?", Some(OBJ_NAME))?;
                 time_it("Triangulating and printing the obj", || {
-                    laz_info.print_as_obj(output_path, 0.5).expect("Couldn't print the obj");
+                    laz_info.print_as_obj(output_path, 5.0).expect("Couldn't print the obj");
                 });
             }
             _ => {
