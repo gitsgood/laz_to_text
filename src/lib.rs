@@ -3,7 +3,6 @@ use native_dialog::{DialogBuilder};
 use las::{Point, Reader};
 use serde::{Serialize};
 use rayon::prelude::*;
-use delaunator::{triangulate};
 
 pub mod constants;
 
@@ -338,59 +337,160 @@ impl LazInfo {
         Ok(())
     }
 
-    pub fn print_as_obj<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
-        // 1. Get the points. We use the current state of the points (scaled/translated).
-        // Since delaunator needs f64, we handle both variants of PointVector.
-        let points_f64: Vec<LazPoint> = match &self.points {
-            PointVector::Uncasted(p) => p.clone(),
-            PointVector::Casted(p) => p.iter().map(|p32| LazPoint {
-                x: p32.x as f64,
-                y: p32.y as f64,
-                z: p32.z as f64,
-                intensity: (p32.i * u16::MAX as f32) as u16,
-            }).collect(),
+pub fn print_as_obj<P: AsRef<Path>>(&self, path: P, max_edge_length: f64) -> Result<(), Box<dyn std::error::Error>> {
+    let points_f64: Vec<LazPoint> = match &self.points {
+        PointVector::Uncasted(p) => p.clone(),
+        PointVector::Casted(p) => p.iter().map(|p32| LazPoint {
+            x: p32.x as f64, y: p32.y as f64, z: p32.z as f64, intensity: (p32.i * u16::MAX as f32) as u16,
+        }).collect(),
+    };
+
+    // 1. Project to 2D and Triangulate
+    let min_x = points_f64.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+    let min_z = points_f64.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
+
+    let coords: Vec<delaunator::Point> = points_f64
+        .iter()
+        .map(|p| delaunator::Point { 
+            x: p.x - min_x, 
+            y: p.z - min_z
+        })
+        .collect();
+
+    let result = delaunator::triangulate(&coords);
+
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+
+    // 2. Write Vertices (Lifting to Vulkan Space)
+    for p in &points_f64 {
+        //writeln!(writer, "v {:.6} {:.6} {:.6}", p.x, p.z, -p.y)?;
+        //writeln!(writer, "v {:.6} {:.6} {:.6}", p.y, p.z, -p.x)?;
+        //writeln!(writer, "v {:.6} {:.6} {:.6}", p.x, p.y, -p.z)?;
+        writeln!(writer, "v {:.6} {:.6} {:.6}", p.x, p.y, p.z)?;
+    }
+
+    // 3. FILTERED TRIANGULATION
+    for i in (0..result.triangles.len()).step_by(3) {
+        let idx_a = result.triangles[i];
+        let idx_b = result.triangles[i + 1];
+        let idx_c = result.triangles[i + 2];
+
+        let p_a = &points_f64[idx_a];
+        let p_b = &points_f64[idx_b];
+        let p_c = &points_f64[idx_c];
+
+        // Calculate 3D Euclidean distance for all three edges of the triangle
+        let dist_ab = ((p_a.x - p_b.x).powi(2) + (p_a.y - p_b.y).powi(2) + (p_a.z - p_b.z).powi(2)).sqrt();
+        let dist_bc = ((p_b.x - p_c.x).powi(2) + (p_b.y - p_c.y).powi(2) + (p_b.z - p_c.z).powi(2)).sqrt();
+        let dist_ca = ((p_c.x - p_a.x).powi(2) + (p_c.y - p_a.y).powi(2) + (p_c.z - p_a.z).powi(2)).sqrt();
+
+        // Only write the face if NO edge is longer than our threshold
+        if dist_ab < max_edge_length && dist_bc < max_edge_length && dist_ca < max_edge_length {
+            writeln!(writer, "f {} {} {}", idx_a + 1, idx_b + 1, idx_c + 1)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+    pub fn voxel_downsample(&mut self, voxel_size: f64) -> Result<(), Box<dyn std::error::Error>> {
+        // We need the points in Uncasted form to process them
+        let points = match &self.points {
+            PointVector::Uncasted(p) => p,
+            PointVector::Casted(_p) => {
+                // If already casted, we temporarily cast back to f64 for precision during averaging
+                return Err("Cannot downsample casted points. Call this before cast_self().".into());
+            }
         };
 
-        // 2. Project to 2D (X, Y) for triangulation
-        let coords: Vec<delaunator::Point> = points_f64
-            .iter()
-            .map(|p| delaunator::Point { x: p.x, y: p.y })
+        // Key: (voxel_x, voxel_y, voxel_z), Value: (sum_x, sum_y, sum_z, sum_intensity, count)
+        let mut voxel_grid: HashMap<(i64, i64, i64), (f64, f64, f64, f64, usize)> = HashMap::with_capacity(points.len() / 2);
+
+        for p in points {
+            // Calculate voxel coordinates
+            let vx = (p.x / voxel_size).floor() as i64;
+            let vy = (p.y / voxel_size).floor() as i64;
+            let vz = (p.z / voxel_size).floor() as i64;
+
+            let entry = voxel_grid.entry((vx, vy, vz)).or_insert((0.0, 0.0, 0.0, 0.0, 0));
+            
+            entry.0 += p.x;
+            entry.1 += p.y;
+            entry.2 += p.z;
+            entry.3 += p.intensity as f64;
+            entry.4 += 1;
+        }
+
+        // Convert centroids back into LazPoints
+        let downsampled_points: Vec<LazPoint> = voxel_grid
+            .into_iter()
+            .map(|(_, (sx, sy, sz, si, count))| {
+                let c = count as f64;
+                LazPoint {
+                    x: sx / c,
+                    y: sy / c,
+                    z: sz / c,
+                    intensity: (si / c) as u16,
+                }
+            })
             .collect();
 
-        // 3. Perform Delaunay Triangulation
-        let result = triangulate(&coords);
+        self.points = PointVector::Uncasted(downsampled_points);
+        self.point_count = self.points.get().unwrap().len();
 
-        // 4. Write to OBJ file
-        let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
-
-        // Write Vertices (v x y z)
-        for p in &points_f64 {
-            writeln!(writer, "v {:.6} {:.6} {:.6}", p.x, p.y, p.z)?;
-        }
-
-        // Write Faces (f v1 v2 v3)
-        // delaunator's triangles array is a flat list of vertex indices
-        for i in (0..result.triangles.len()).step_by(3) {
-            let v1 = result.triangles[i] + 1;     // OBJ is 1-indexed
-            let v2 = result.triangles[i + 1] + 1;
-            let v3 = result.triangles[i + 2] + 1;
-            writeln!(writer, "f {} {} {}", v1, v2, v3)?;
-        }
-
-        writer.flush()?;
         Ok(())
     }
 }
 
 pub fn process_laz_list(list: Vec<LazInfo>) -> Result<LazInfo, Box<dyn std::error::Error>> {
-    let final_laz_info = list.into_par_iter().reduce(
+    let mut final_laz_info = list.into_par_iter().reduce(
         || LazInfo::default(), 
         |mut laz_a, mut laz_b|{
             laz_a.merge(&mut laz_b).unwrap();
             laz_a
         }
     );
+
+    time_it("Voxel Downsampling...", || {
+        final_laz_info.voxel_downsample(0.5).expect("Downsample failed");
+    });
+
+    // 1. Extract Z values to calculate thresholds
+    let mut z_values: Vec<f64> = final_laz_info.points.get().unwrap()
+        .iter()
+        .map(|p| p.z)
+        .collect();
+
+    // Sort is necessary for percentiles
+    z_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let len = z_values.len();
+    if len > 4 {
+        let q1 = z_values[len / 4];
+        let q3 = z_values[(3 * len) / 4];
+        let iqr = q3 - q1;
+
+        let min_z = q1 - (1.5 * iqr);
+        let max_z = q3 + (1.5 * iqr);
+
+        // Use a larger multiplier (e.g., 3.0) if you want to be less aggressive 
+        // with filtering (keeps more points).
+        
+        println!("Dynamic Z-Thresholds: Min: {:.2}, Max: {:.2}", min_z, max_z);
+
+        // 2. Actually filter the points inside the PointVector
+        // We need to modify the vector in place or replace it
+        let filtered_points: Vec<LazPoint> = final_laz_info.points.get().unwrap()
+            .iter()
+            .filter(|p| p.z >= min_z && p.z <= max_z)
+            .cloned()
+            .collect();
+
+        final_laz_info.points = PointVector::Uncasted(filtered_points);
+        final_laz_info.point_count = final_laz_info.points.get().unwrap().len();
+    }
 
     Ok(final_laz_info)
 }
@@ -599,7 +699,7 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
                 println!("You selected obj...");
                 let output_path = get_folder("Where do you want your LAZ obj file placed?", Some(OBJ_NAME))?;
                 time_it("Triangulating and printing the obj", || {
-                    laz_info.print_as_obj(output_path).expect("Couldn't print the obj");
+                    laz_info.print_as_obj(output_path, 0.5).expect("Couldn't print the obj");
                 });
             }
             _ => {
