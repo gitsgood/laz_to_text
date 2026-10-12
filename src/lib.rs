@@ -3,6 +3,7 @@ use native_dialog::{DialogBuilder};
 use las::{Point, Reader};
 use serde::{Serialize};
 use rayon::prelude::*;
+use delaunator::{triangulate};
 
 pub mod constants;
 
@@ -336,6 +337,50 @@ impl LazInfo {
         writer.flush()?;
         Ok(())
     }
+
+    pub fn print_as_obj<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        // 1. Get the points. We use the current state of the points (scaled/translated).
+        // Since delaunator needs f64, we handle both variants of PointVector.
+        let points_f64: Vec<LazPoint> = match &self.points {
+            PointVector::Uncasted(p) => p.clone(),
+            PointVector::Casted(p) => p.iter().map(|p32| LazPoint {
+                x: p32.x as f64,
+                y: p32.y as f64,
+                z: p32.z as f64,
+                intensity: (p32.i * u16::MAX as f32) as u16,
+            }).collect(),
+        };
+
+        // 2. Project to 2D (X, Y) for triangulation
+        let coords: Vec<delaunator::Point> = points_f64
+            .iter()
+            .map(|p| delaunator::Point { x: p.x, y: p.y })
+            .collect();
+
+        // 3. Perform Delaunay Triangulation
+        let result = triangulate(&coords);
+
+        // 4. Write to OBJ file
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+
+        // Write Vertices (v x y z)
+        for p in &points_f64 {
+            writeln!(writer, "v {:.6} {:.6} {:.6}", p.x, p.y, p.z)?;
+        }
+
+        // Write Faces (f v1 v2 v3)
+        // delaunator's triangles array is a flat list of vertex indices
+        for i in (0..result.triangles.len()).step_by(3) {
+            let v1 = result.triangles[i] + 1;     // OBJ is 1-indexed
+            let v2 = result.triangles[i + 1] + 1;
+            let v3 = result.triangles[i + 2] + 1;
+            writeln!(writer, "f {} {} {}", v1, v2, v3)?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
 }
 
 pub fn process_laz_list(list: Vec<LazInfo>) -> Result<LazInfo, Box<dyn std::error::Error>> {
@@ -535,7 +580,7 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
 
     loop 
     {
-        match user_querry("------------------------------\nWhat file extension do you wish your data to have?\n1: json\n2: binary\nElse: txt")? {
+        match user_querry("------------------------------\nWhat file extension do you wish your data to have?\n1: json\n2: binary\n3: obj\nElse: txt")? {
             1 => {
                 println!("You selected json...");
                 let output_path = get_folder("Where do you want your LAZ json file placed?", Some(JSON_NAME))?;
@@ -548,6 +593,13 @@ pub fn user_interface() -> Result<(), Box<dyn std::error::Error>> {
                 let output_path = get_folder("Where do you want your LAZ binary file placed?", Some(BINARY_NAME))?;
                 time_it("Printing the binary", || {
                     laz_info.print_as_binary(output_path).expect("Couldn't print the binary");
+                });
+            }
+            3 => {
+                println!("You selected obj...");
+                let output_path = get_folder("Where do you want your LAZ obj file placed?", Some(OBJ_NAME))?;
+                time_it("Triangulating and printing the obj", || {
+                    laz_info.print_as_obj(output_path).expect("Couldn't print the obj");
                 });
             }
             _ => {
